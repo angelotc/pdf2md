@@ -1,4 +1,4 @@
-# paper2md
+# pdf2md
 
 Automatically generate structured markdown summaries of academic PDFs for use as context in engineering codebases.
 
