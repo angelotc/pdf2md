@@ -144,6 +144,12 @@ def generate_summaries(papers: list[Paper]) -> list[Paper]:
     return summarized
 
 
+def _github_slug(title: str) -> str:
+    """Mimic GitHub's heading anchor slugger so index links resolve on github.com."""
+    slug = re.sub(r"[^\w\s-]", "", title.lower())
+    return re.sub(r"\s", "-", slug)
+
+
 def build_markdown(papers: list[Paper]) -> str:
     """Build final markdown document from papers."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -158,7 +164,7 @@ def build_markdown(papers: list[Paper]) -> str:
     lines.append("## Index")
     lines.append("")
     for p in papers:
-        anchor = re.sub(r"[^a-z0-9]+", "-", p.title.lower()).strip("-")
+        anchor = _github_slug(p.title)
         lines.append(f"- [{p.title}](#{anchor})")
     lines.append("")
 
