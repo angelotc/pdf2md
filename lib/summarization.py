@@ -142,7 +142,15 @@ def summarize_paper(paper: Paper, max_chunks: int | None = None) -> Paper:
 
     effective_max_chunks = max_chunks if max_chunks is not None else config_max_chunks
 
-    chunks = chunk_text_for_llm(paper.text, max_chars=max_chars)[:effective_max_chunks]
+    chunks = chunk_text_for_llm(paper.text, max_chars=max_chars)
+    if len(chunks) > effective_max_chunks:
+        skipped_chars = sum(len(c) for c in chunks[effective_max_chunks:])
+        tqdm.write(
+            f"[WARN] {paper.pdf_path.name}: text produced {len(chunks)} chunks, "
+            f"summarizing only the first {effective_max_chunks} "
+            f"(~{skipped_chars} chars skipped)"
+        )
+    chunks = chunks[:effective_max_chunks]
     chunk_summaries: list[str] = []
 
     # Use tqdm for chunk summarization if there are multiple
