@@ -39,6 +39,16 @@ cp .env.local .env
 - `OPENAI_MODEL` - Model to use (default: `gpt-5-mini-2025-08-07`)
 - `OPENAI_BASE_URL` - API base URL (optional, for OpenRouter, Gemini, etc.)
 
+### Recommended provider
+
+For best results, use GLM-5.3-Flash via [OpenRouter](https://openrouter.ai/z-ai/glm-5.3-flash) — high summary quality at low cost ($0.075/M input tokens) with a ~1.3M-token context window:
+
+```env
+OPENAI_API_KEY=sk-or-...          # your OpenRouter API key
+OPENAI_BASE_URL=https://openrouter.ai/api/v1
+OPENAI_MODEL=z-ai/glm-5.3-flash
+```
+
 ### prompts.json
 
 Customize summarization prompts and chunking via `prompts.json`:
