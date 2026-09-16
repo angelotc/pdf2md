@@ -113,24 +113,36 @@ def chunk_text_for_llm(text: str, max_chars: int = 12000) -> list[str]:
     Split text into paragraph-aligned chunks for LLM processing.
 
     Preserves paragraph boundaries to avoid breaking mid-thought.
+    A single paragraph longer than max_chars is hard-split at word
+    boundaries so the chunk budget is always respected.
     """
     if len(text) <= max_chars:
         return [text]
 
-    paras = text.split("\n\n")
+    pieces: list[str] = []
+    for p in text.split("\n\n"):
+        p = p.strip()
+        if not p:
+            continue
+        while len(p) > max_chars:
+            cut = p.rfind(" ", 0, max_chars)
+            if cut <= 0:
+                cut = max_chars
+            pieces.append(p[:cut])
+            p = p[cut:].lstrip()
+        if p:
+            pieces.append(p)
+
     chunks: list[str] = []
     cur: list[str] = []
     cur_len = 0
 
-    for p in paras:
-        p = p.strip()
-        if not p:
-            continue
+    for p in pieces:
         add_len = len(p) + 2
         if cur and (cur_len + add_len) > max_chars:
             chunks.append("\n\n".join(cur))
             cur = [p]
-            cur_len = len(p)
+            cur_len = add_len
         else:
             cur.append(p)
             cur_len += add_len
