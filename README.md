@@ -77,6 +77,8 @@ python summarize_papers.py --no-cache
 python summarize_papers.py --clear-cache
 ```
 
+The script exits non-zero if any PDF fails to extract or summarize; failed papers are marked inline in the output markdown.
+
 ### Command-line options
 
 - `--papers-dir DIR` - Directory containing PDFs (default: `papers`)

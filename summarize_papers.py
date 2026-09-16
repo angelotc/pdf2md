@@ -25,6 +25,7 @@ import argparse
 import os
 import re
 import traceback
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -63,12 +64,12 @@ def load_papers(
     papers_dir: Path,
     max_pages: int | None = None,
     cache: PaperCache | None = None
-) -> list[Paper]:
+) -> tuple[list[Paper], int]:
     """
     Extract title + text from all PDFs in directory.
     Uses cache to avoid re-extracting unchanged PDFs.
-    
-    Returns: list of Paper objects with text extracted
+
+    Returns: (list of Paper objects with text extracted, extraction failure count)
     """
     pdfs = sorted(papers_dir.glob("*.pdf"))
     papers: list[Paper] = []
@@ -116,18 +117,18 @@ def load_papers(
     if failures:
         tqdm.write(f"[WARN] Extraction failures: {failures}/{len(pdfs)} PDFs")
 
-    return papers
+    return papers, failures
 
 
-def generate_summaries(papers: list[Paper]) -> list[Paper]:
-    """Generate summaries for all papers using LLM."""
+def generate_summaries(papers: list[Paper]) -> tuple[list[Paper], int]:
+    """Generate summaries for all papers using LLM. Returns (papers, failure count)."""
     summarized: list[Paper] = []
     failures = 0
 
     for paper in tqdm(papers, desc="Summarizing"):
         # Skip papers with no text (nothing to summarize)
         if not paper.text:
-            summarized.append(paper)
+            summarized.append(replace(paper, summary_md="_No extractable text in this PDF._"))
             continue
 
         try:
@@ -136,12 +137,15 @@ def generate_summaries(papers: list[Paper]) -> list[Paper]:
         except Exception as e:
             failures += 1
             _report_error("summarize", paper.pdf_path, e)
-            summarized.append(paper)
+            summarized.append(replace(
+                paper,
+                summary_md=f"> **Summary generation failed**: {_format_exc(e)}",
+            ))
 
     if failures:
         tqdm.write(f"[WARN] Summarization failures: {failures}/{len(papers)} PDFs")
 
-    return summarized
+    return summarized, failures
 
 
 def _github_slug(title: str) -> str:
@@ -225,13 +229,20 @@ def main() -> int:
         print("[INFO] Cache cleared")
 
     # Pipeline: load → summarize → write
-    papers = load_papers(papers_dir, max_pages=max_pages, cache=cache)
-    papers = generate_summaries(papers)
+    papers, extract_failures = load_papers(papers_dir, max_pages=max_pages, cache=cache)
+    papers, summarize_failures = generate_summaries(papers)
 
     md = build_markdown(papers)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(md, encoding="utf-8")
     print(f"Wrote: {out_path}")
+
+    if extract_failures or summarize_failures:
+        print(
+            f"[WARN] Completed with failures: extraction={extract_failures}, "
+            f"summarization={summarize_failures}"
+        )
+        return 1
     return 0
 
 
