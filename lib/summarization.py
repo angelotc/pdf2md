@@ -98,7 +98,7 @@ def _reduce_chunk_summaries(client, model: str, paper: Paper, chunk_summaries: l
     return resp.choices[0].message.content.strip()
 
 
-def summarize_paper(paper: Paper, max_chunks: int = 8) -> Paper:
+def summarize_paper(paper: Paper, max_chunks: int | None = None) -> Paper:
     """
     Generate summary using OpenAI LLM (required).
 
@@ -108,6 +108,10 @@ def summarize_paper(paper: Paper, max_chunks: int = 8) -> Paper:
     3. Reduce chunk summaries into final summary
 
     Requires: OPENAI_API_KEY environment variable
+
+    Args:
+        paper: Paper with text to summarize.
+        max_chunks: Overrides prompts.json's max_chunks when given.
 
     Returns: New Paper object with summary_md populated.
     Raises: RuntimeError if OPENAI_API_KEY not set
@@ -136,8 +140,7 @@ def summarize_paper(paper: Paper, max_chunks: int = 8) -> Paper:
     max_chars = config.get("chunk_max_chars", DEFAULT_MAX_CHARS_PER_CHUNK)
     config_max_chunks = config.get("max_chunks", DEFAULT_MAX_CHUNKS)
 
-    # Preserve function argument as an override when explicitly passed by callers.
-    effective_max_chunks = max_chunks if max_chunks != DEFAULT_MAX_CHUNKS else config_max_chunks
+    effective_max_chunks = max_chunks if max_chunks is not None else config_max_chunks
 
     chunks = chunk_text_for_llm(paper.text, max_chars=max_chars)[:effective_max_chunks]
     chunk_summaries: list[str] = []
