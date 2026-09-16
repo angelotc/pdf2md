@@ -52,7 +52,7 @@ def _load_config() -> dict[str, Any]:
     if _CONFIG_CACHE is not None:
         return _CONFIG_CACHE
 
-    path = Path("prompts.json")
+    path = Path(__file__).resolve().parent.parent / "prompts.json"
     if not path.exists():
         _CONFIG_CACHE = {}
         return _CONFIG_CACHE

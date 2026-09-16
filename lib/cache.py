@@ -11,8 +11,9 @@ from typing import Any
 from lib.models import Paper
 
 
-DEFAULT_CACHE_DIR = ".paper2md"
-DEFAULT_CACHE_FILE = f"{DEFAULT_CACHE_DIR}/cache.json"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_CACHE_DIR = _REPO_ROOT / ".paper2md"
+DEFAULT_CACHE_FILE = DEFAULT_CACHE_DIR / "cache.json"
 
 
 def compute_pdf_hash(pdf_path: Path) -> str:
