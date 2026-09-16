@@ -165,6 +165,12 @@ Generated markdown includes:
   - Limitations and open questions
   - DOI link (if available)
 
+## Testing
+
+```bash
+python -m unittest discover -s tests
+```
+
 ## Dependencies
 
 - `pdfminer.six` - PDF text extraction (preferred for two-column layouts)
