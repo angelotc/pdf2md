@@ -44,6 +44,32 @@ DEFAULT_REDUCE_PROMPT: Final[str] = (
 
 
 _CONFIG_CACHE: dict[str, Any] | None = None
+_CLIENT: Any = None
+
+
+def _get_client() -> Any:
+    """Create the shared OpenAI client once per run."""
+    global _CLIENT
+    if _CLIENT is not None:
+        return _CLIENT
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "OPENAI_API_KEY environment variable is required. "
+            "Set it in .env or export OPENAI_API_KEY=sk-..."
+        )
+
+    try:
+        from openai import OpenAI  # type: ignore
+    except ImportError:
+        raise RuntimeError(
+            "openai package not installed. Run: pip install openai"
+        )
+
+    base_url = os.environ.get("OPENAI_BASE_URL")
+    _CLIENT = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
+    return _CLIENT
 
 
 def _load_config() -> dict[str, Any]:
@@ -116,22 +142,7 @@ def summarize_paper(paper: Paper, max_chunks: int | None = None) -> Paper:
     Returns: New Paper object with summary_md populated.
     Raises: RuntimeError if OPENAI_API_KEY not set
     """
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY environment variable is required. "
-            "Set it in .env or export OPENAI_API_KEY=sk-..."
-        )
-
-    try:
-        from openai import OpenAI  # type: ignore
-    except ImportError:
-        raise RuntimeError(
-            "openai package not installed. Run: pip install openai"
-        )
-
-    base_url = os.environ.get("OPENAI_BASE_URL")
-    client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
+    client = _get_client()
     model = os.environ.get("OPENAI_MODEL", "gpt-5-mini-2025-08-07")
 
     config = _load_config()
