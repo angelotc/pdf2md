@@ -171,7 +171,3 @@ Generated markdown includes:
 - `python-dotenv` - Environment variable loading
 - `tqdm` - Progress bars
 - `openai` - **Required** for LLM-based summarization
-
-## License
-
-See LICENSE file for details.
