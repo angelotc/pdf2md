@@ -1,3 +1,4 @@
 .env
 .venv/
 .paper2md/
+__pycache__/
