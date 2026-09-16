@@ -22,10 +22,7 @@ _BOILERPLATE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^\s*conference acronym\b", re.I),
 )
 
-# Filename sanitization patterns (from rename_papers_by_title.py)
-_INVALID_WIN_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1F]')
 _WHITESPACE_RE = re.compile(r"\s+")
-_PRIVATE_USE_RE = re.compile(r"[\uE000-\uF8FF]")
 _BOM_PREFIX_RE = re.compile(r"^\s*(?:\ufeff|þÿ|ÿþ|\ufffe|\ufeff)\s*")
 
 
@@ -88,76 +85,3 @@ def normalize_for_sentences(text: str) -> str:
         p2 = re.sub(r"\s{2,}", " ", p2).strip()
         merged.append(p2)
     return "\n\n".join(merged)
-
-
-def to_safe_filename(title: str, max_len: int = 160) -> str:
-    """
-    Convert paper title to Windows-safe filename.
-
-    Handles:
-    - Unicode normalization (NFKC)
-    - Invalid Windows characters
-    - BOM artifacts from PDF extraction
-    - Private-use Unicode characters
-    - Length limits
-    - Spaced-out titles (e.g., "C o a r s e" -> "Coarse")
-    """
-    # Unicode normalize to clean up ligatures / presentation forms
-    t = unicodedata.normalize("NFKC", title)
-
-    # Strip common BOM-ish garbage
-    t = _BOM_PREFIX_RE.sub("", t)
-
-    # Known PDF extraction artifact: "\uE039" should be "ft"
-    t = t.replace("\uE039", "ft")
-
-    # Remove any remaining private-use glyphs
-    t = _PRIVATE_USE_RE.sub("", t)
-
-    # Normalize whitespace and strip
-    t = _WHITESPACE_RE.sub(" ", t).strip()
-
-    # Heuristic: some PDFs yield titles like "C o a r s e - t o - f i n e ..."
-    # If there are many single-letter tokens, de-space runs of letters.
-    tokens = t.split(" ")
-    if tokens:
-        def is_single_letter_token(tok: str) -> bool:
-            letters = [ch for ch in tok if ch.isalpha()]
-            return len(letters) == 1 and len(tok) <= 3
-
-        single_letter = sum(1 for tok in tokens if is_single_letter_token(tok))
-        if single_letter / max(len(tokens), 1) > 0.35:
-            rebuilt: list[str] = []
-            buf: list[str] = []
-            for tok in tokens:
-                letters = [ch for ch in tok if ch.isalpha()]
-                if len(letters) == 1 and len(tok) <= 3:
-                    buf.append(letters[0])
-                else:
-                    if buf:
-                        rebuilt.append("".join(buf))
-                        buf = []
-                    rebuilt.append(tok)
-            if buf:
-                rebuilt.append("".join(buf))
-            t = " ".join(rebuilt)
-            t = _WHITESPACE_RE.sub(" ", t).strip()
-
-    # Replace invalid Windows characters with spaces, then re-collapse
-    t = _INVALID_WIN_CHARS_RE.sub(" ", t)
-    t = _WHITESPACE_RE.sub(" ", t).strip()
-
-    # Avoid trailing dot/space (illegal on Windows)
-    t = t.rstrip(" .")
-
-    # Prevent empty filenames
-    if not t:
-        t = "untitled"
-
-    # Conservative length limit (path length safety)
-    if len(t) > max_len:
-        t = t[:max_len].rstrip(" .")
-        if not t:
-            t = "untitled"
-
-    return t + ".pdf"

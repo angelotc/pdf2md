@@ -13,11 +13,3 @@ class Paper:
     title: str
     text: str
     summary_md: str | None = None
-
-
-@dataclass(frozen=True)
-class ExtractedContent:
-    """Structured content extracted from paper text."""
-    abstract: str | None
-    doi: str | None
-    contributions: list[str]

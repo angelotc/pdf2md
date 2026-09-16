@@ -133,7 +133,7 @@ The codebase follows a **deep modules** design pattern with strict separation of
 
 - `lib/pdf_extract.py` - Deep module hiding all PDF parsing complexity
 - `lib/text_clean.py` - Pure text transformation functions
-- `lib/content_analysis.py` - Pure analysis functions (abstract, DOI, contributions)
+- `lib/content_analysis.py` - Pure analysis functions (DOI, abstract) + LLM chunking
 - `lib/summarization.py` - LLM-based summarization (OpenAI)
 - `lib/cache.py` - Caches extracted text (not summaries) for incremental processing
 - `lib/models.py` - Immutable dataclasses (Paper, ExtractedContent)

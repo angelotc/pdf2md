@@ -116,30 +116,6 @@ class PaperCache:
             "text": paper.text
         }
 
-    def is_changed(self, pdf_path: Path) -> tuple[bool, str]:
-        """
-        Check if PDF has changed since last cache.
-        
-        Returns: (is_changed, current_hash)
-        """
-        current_hash = compute_pdf_hash(pdf_path)
-        entry = self._data["papers"].get(pdf_path.name)
-
-        if not entry:
-            return True, current_hash
-
-        return entry.get("hash") != current_hash, current_hash
-
     def clear(self) -> None:
         """Clear all cached entries."""
         self._data["papers"] = {}
-
-    def stats(self) -> dict[str, int]:
-        """Return cache statistics."""
-        return {
-            "total_entries": len(self._data["papers"]),
-            "with_text": sum(
-                1 for e in self._data["papers"].values()
-                if e.get("text") is not None
-            )
-        }

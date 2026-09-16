@@ -34,7 +34,7 @@ from tqdm import tqdm
 from lib.models import Paper
 from lib.pdf_extract import extract_paper_from_pdf
 from lib.summarization import summarize_paper
-from lib.content_analysis import extract_structured_content
+from lib.content_analysis import find_doi
 from lib.cache import PaperCache, compute_pdf_hash
 
 # Load environment variables from root .env if it exists
@@ -176,9 +176,9 @@ def build_markdown(papers: list[Paper]) -> str:
         lines.append("")
         lines.append(f"- **Source PDF**: `{p.pdf_path.as_posix()}`")
 
-        content = extract_structured_content(p.text)
-        if content.doi:
-            lines.append(f"- **DOI**: `https://doi.org/{content.doi}`")
+        doi = find_doi(p.text)
+        if doi:
+            lines.append(f"- **DOI**: `https://doi.org/{doi}`")
         lines.append("")
 
         if p.summary_md:
