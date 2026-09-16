@@ -68,8 +68,10 @@ def clean_pdf_text(raw_text: str) -> str:
     """
     txt = _dehyphenate_wrapped_words(raw_text)
     txt = _strip_boilerplate_lines(txt)
-    # Basic ligature cleanup
-    txt = txt.replace("f i", "fi").replace("f l", "fl").replace("f f", "ff")
+    # Fold real ligature codepoints (ﬁ ﬂ ﬀ ...) into plain letters. Blind
+    # string replacement of "f i"/"f l"/"f f" would also corrupt legitimate
+    # text like "of features" or "of if", so NFKC only.
+    txt = unicodedata.normalize("NFKC", txt)
     return txt
 
 
