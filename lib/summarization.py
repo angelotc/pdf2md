@@ -17,6 +17,11 @@ from lib.content_analysis import chunk_text_for_llm
 DEFAULT_MAX_CHARS_PER_CHUNK: Final[int] = 12000
 DEFAULT_MAX_CHUNKS: Final[int] = 8
 
+# Out-of-the-box defaults: OpenRouter + Gemini 3.1 Flash Lite (multimodal,
+# so it also serves figure descriptions via OPENAI_VISION_MODEL fallback).
+DEFAULT_BASE_URL: Final[str] = "https://openrouter.ai/api/v1"
+DEFAULT_MODEL: Final[str] = "google/gemini-3.1-flash-lite"
+
 DEFAULT_CHUNK_PROMPT: Final[str] = (
     "You are summarizing an ML/RecSys research paper for an engineering codebase context.\n"
     "Write a concise, high-signal summary of THIS CHUNK.\n"
@@ -67,8 +72,8 @@ def _get_client() -> Any:
             "openai package not installed. Run: pip install openai"
         )
 
-    base_url = os.environ.get("OPENAI_BASE_URL")
-    _CLIENT = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
+    base_url = os.environ.get("OPENAI_BASE_URL") or DEFAULT_BASE_URL
+    _CLIENT = OpenAI(api_key=api_key, base_url=base_url)
     return _CLIENT
 
 
@@ -143,7 +148,7 @@ def summarize_paper(paper: Paper, max_chunks: int | None = None) -> Paper:
     Raises: RuntimeError if OPENAI_API_KEY not set
     """
     client = _get_client()
-    model = os.environ.get("OPENAI_MODEL", "gpt-5-mini-2025-08-07")
+    model = os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
 
     config = _load_config()
 

@@ -2,3 +2,4 @@
 .venv/
 .paper2md/
 __pycache__/
+output/

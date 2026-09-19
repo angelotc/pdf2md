@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from lib.models import Figure
 from lib.text_clean import _clean_text, _strip_boilerplate_lines
 
 
@@ -82,3 +83,59 @@ def chunk_text_for_llm(text: str, max_chars: int = 12000) -> list[str]:
     if cur:
         chunks.append("\n\n".join(cur))
     return chunks
+
+
+def annotate_text_with_figures(text: str, figures: list[Figure] | tuple[Figure, ...]) -> str:
+    """Weave figure descriptions into paper text for the summarizer.
+
+    Each figure's block is inserted right after the first occurrence of its
+    caption (or label) in the text, so descriptions land near the relevant
+    discussion. Figures whose captions aren't found in the text are appended
+    as a trailing block. Descriptions equal to the caption-only placeholder
+    are still inserted (the caption reference keeps context) but without a
+    duplicate description body.
+    """
+    if not figures:
+        return text
+
+    blocks: dict[int, str] = {}
+    unplaced: list[Figure] = []
+    for fig in figures:
+        anchor = None
+        for candidate in (fig.caption, fig.label):
+            if candidate:
+                idx = text.find(candidate)
+                if idx >= 0:
+                    # Insert after the caption's line end
+                    eol = text.find("\n", idx)
+                    anchor = eol if eol >= 0 else len(text)
+                    break
+        if anchor is None:
+            unplaced.append(fig)
+        else:
+            blocks.setdefault(anchor, []).append(_figure_block(fig))
+
+    if blocks:
+        out: list[str] = []
+        last = 0
+        for anchor in sorted(blocks):
+            out.append(text[last:anchor])
+            out.append("\n\n" + "\n\n".join(blocks[anchor]))
+            last = anchor
+        out.append(text[last:])
+        text = "".join(out)
+
+    if unplaced:
+        text += "\n\n" + "\n\n".join(_figure_block(f) for f in unplaced)
+
+    return text
+
+
+def _figure_block(fig: Figure) -> str:
+    label = (fig.label or "Figure").rstrip(": .")
+    header = f"[{label} (page {fig.page + 1})]"
+    if fig.caption and fig.caption != fig.label:
+        header += f" {fig.caption}"
+    if fig.description:
+        return f"{header}\n{fig.description}"
+    return header

@@ -15,8 +15,9 @@ Required env vars:
   OPENAI_API_KEY          -> API key for LLM provider
 
 Optional env vars:
-  OPENAI_MODEL            -> default: gpt-5-mini-2025-08-07
-  OPENAI_BASE_URL         -> API base URL (e.g. OpenRouter, Gemini)
+  OPENAI_MODEL            -> default: google/gemini-3.1-flash-lite
+  OPENAI_BASE_URL         -> API base URL (default: https://openrouter.ai/api/v1)
+  OPENAI_VISION_MODEL     -> model for figure descriptions (default: OPENAI_MODEL)
 """
 
 from __future__ import annotations
@@ -32,10 +33,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 from tqdm import tqdm
 
-from lib.models import Paper
+from lib.models import Paper, Figure
 from lib.pdf_extract import extract_paper_from_pdf
+from lib.figure_extract import extract_figures
+from lib.vision import describe_figures
 from lib.summarization import summarize_paper
-from lib.content_analysis import find_doi
+from lib.content_analysis import find_doi, annotate_text_with_figures
 from lib.cache import PaperCache, compute_pdf_hash
 
 # Load environment variables from root .env if it exists
@@ -63,10 +66,12 @@ def _report_error(stage: str, pdf: Path, e: Exception) -> None:
 def load_papers(
     papers_dir: Path,
     max_pages: int | None = None,
-    cache: PaperCache | None = None
+    cache: PaperCache | None = None,
+    extract_figs: bool = True,
+    max_figures: int = 12,
 ) -> tuple[list[Paper], int]:
     """
-    Extract title + text from all PDFs in directory.
+    Extract title + text (+ figures) from all PDFs in directory.
     Uses cache to avoid re-extracting unchanged PDFs.
 
     Returns: (list of Paper objects with text extracted, extraction failure count)
@@ -82,19 +87,24 @@ def load_papers(
         if cache:
             cached_paper = cache.get_cached(pdf)
             if cached_paper:
+                if not extract_figs and cached_paper.figures:
+                    cached_paper = replace(cached_paper, figures=())
                 papers.append(cached_paper)
                 cached_count += 1
                 continue
 
         try:
             paper = extract_paper_from_pdf(pdf, max_pages=max_pages)
-            
-            # Store extracted text in cache
+            if extract_figs:
+                figures = extract_figures(pdf, max_pages=max_pages, max_figures=max_figures)
+                paper = replace(paper, figures=tuple(figures))
+
+            # Store extracted text + figure metadata in cache
             if cache:
                 pdf_hash = compute_pdf_hash(pdf)
                 cache.store(paper, pdf_hash)
                 new_extractions += 1
-                
+
         except Exception as e:
             failures += 1
             _report_error("extract", pdf, e)
@@ -121,17 +131,22 @@ def load_papers(
 
 
 def generate_summaries(papers: list[Paper]) -> tuple[list[Paper], int]:
-    """Generate summaries for all papers using LLM. Returns (papers, failure count)."""
+    """Describe figures via vision LLM, weave into text, then summarize.
+    Returns (papers, failure count)."""
     summarized: list[Paper] = []
     failures = 0
 
     for paper in tqdm(papers, desc="Summarizing"):
-        # Skip papers with no text (nothing to summarize)
-        if not paper.text:
+        # Skip papers with nothing to summarize
+        if not paper.text and not paper.figures:
             summarized.append(replace(paper, summary_md="_No extractable text in this PDF._"))
             continue
 
         try:
+            if paper.figures:
+                paper = describe_figures(paper)
+                annotated = annotate_text_with_figures(paper.text or "", paper.figures)
+                paper = replace(paper, text=annotated)
             result = summarize_paper(paper)
             summarized.append(result)
         except Exception as e:
@@ -158,7 +173,7 @@ def build_markdown(papers: list[Paper]) -> str:
     """Build final markdown document from papers."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines: list[str] = []
-    
+
     lines.append("# Papers Summary")
     lines.append("")
     lines.append(f"_Generated: {now}_")
@@ -185,11 +200,49 @@ def build_markdown(papers: list[Paper]) -> str:
             lines.append(f"- **DOI**: `https://doi.org/{doi}`")
         lines.append("")
 
+        if p.figures:
+            lines.append("### Figures")
+            lines.append("")
+            for fig in p.figures:
+                rel = _figure_link(p, fig)
+                if rel:
+                    alt = (fig.caption or fig.label or "figure").replace("[", "(").replace("]", ")")
+                    lines.append(f"![{alt}]({rel})")
+                    lines.append("")
+            lines.append("---")
+            lines.append("")
+
         if p.summary_md:
             lines.append(p.summary_md.strip())
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _figure_link(paper: Paper, fig: Figure) -> str | None:
+    """Relative markdown link target for a figure crop, if it exists."""
+    if not fig.png_path or not fig.png_path.exists():
+        return None
+    return f"figures/{paper.pdf_path.stem}/{fig.png_path.name}"
+
+
+def export_figure_crops(papers: list[Paper], out_path: Path) -> int:
+    """Copy figure crops next to the output markdown (output/figures/<stem>/).
+
+    Returns the number of crops copied.
+    """
+    import shutil
+
+    copied = 0
+    for paper in papers:
+        for fig in paper.figures:
+            if not fig.png_path or not fig.png_path.exists():
+                continue
+            dest_dir = out_path.parent / "figures" / paper.pdf_path.stem
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(fig.png_path, dest_dir / fig.png_path.name)
+            copied += 1
+    return copied
 
 
 def main() -> int:
@@ -212,6 +265,17 @@ def main() -> int:
         action="store_true",
         help="Clear cache before running"
     )
+    ap.add_argument(
+        "--no-figures",
+        action="store_true",
+        help="Skip figure extraction and vision interpretation"
+    )
+    ap.add_argument(
+        "--max-figures",
+        type=int,
+        default=12,
+        help="Max figures to process per paper (default: 12)"
+    )
     args = ap.parse_args()
 
     papers_dir = Path(args.papers_dir)
@@ -229,13 +293,22 @@ def main() -> int:
         print("[INFO] Cache cleared")
 
     # Pipeline: load → summarize → write
-    papers, extract_failures = load_papers(papers_dir, max_pages=max_pages, cache=cache)
+    papers, extract_failures = load_papers(
+        papers_dir,
+        max_pages=max_pages,
+        cache=cache,
+        extract_figs=not args.no_figures,
+        max_figures=args.max_figures,
+    )
     papers, summarize_failures = generate_summaries(papers)
 
     md = build_markdown(papers)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(md, encoding="utf-8")
+    n_crops = export_figure_crops(papers, out_path)
     print(f"Wrote: {out_path}")
+    if n_crops:
+        print(f"Exported {n_crops} figure crops to: {out_path.parent / 'figures'}")
 
     if extract_failures or summarize_failures:
         print(

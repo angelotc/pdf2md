@@ -1,6 +1,7 @@
 {
   "chunk_prompt": "You are summarizing an ML/RecSys research paper for an engineering codebase context.\nWrite a concise, high-signal summary of THIS CHUNK.\nFocus on: problem, key methods, key claims/results, assumptions/limitations.\nReturn 6-10 bullet points.\n\nPaper title: {title}\nChunk {idx}/{total}:\n\n{chunk}",
   "reduce_prompt": "Combine the chunk summaries into a final paper summary for engineers.\nOutput markdown with EXACTLY these sections:\n### TL;DR (3 bullets)\n### Problem\n### Approach\n### Results (include numbers)\n### Practical Takeaways\n### Limitations / Open Questions\nRules:\n- Prefer concrete metrics/numbers if stated.\n- If something isn't supported, write 'Unclear from text'.\n\nPaper title: {title}\n\nChunk summaries:\n\n{summaries}",
+  "figure_prompt": "You are analyzing one figure cropped from an ML/RecSys research paper.\nDescribe what the figure ACTUALLY SHOWS in 3-6 bullet points.\nInclude concrete values: axis ranges, key numbers, trends, comparisons,\nnamed models/systems and how they compare. Read legends and axis labels.\nIf the crop is not a chart/diagram (e.g. plain text or empty), say so briefly.\n\nPaper title: {title}\nFigure: {label}\nCaption: {caption}\nRespond with bullets only, no preamble.",
   "chunk_max_chars": 12000,
   "max_chunks": 8
 }
