@@ -78,14 +78,25 @@ Customize summarization prompts and chunking via `prompts.json`:
 ## Usage
 
 ```bash
-# Basic usage (requires OPENAI_API_KEY in .env or environment)
+# Basic usage (requires OPENAI_API_KEY in .env or environment).
+# Writes one standalone markdown per paper (output/<stem>.md) plus
+# output/INDEX.md linking them all.
 python summarize_papers.py
 
 # Or set API key inline
 OPENAI_API_KEY=sk-... python summarize_papers.py
 
+# Also derive the combined output/PAPERS_SUMMARY.md from the per-paper files
+python summarize_papers.py --combined
+
+# Run the pipeline for a single paper (matched by filename, stem, or unique
+# stem substring). Refreshes its file and INDEX.md; add --combined to also
+# rebuild the combined doc (cheap: derived from disk, no LLM calls).
+python summarize_papers.py --paper wikiskills.pdf
+python summarize_papers.py --paper wikiskills --max-chunks 12
+
 # Custom options
-python summarize_papers.py --papers-dir papers --out output/PAPERS_SUMMARY.md --max-pages 10
+python summarize_papers.py --papers-dir papers --out-dir output --max-pages 10
 
 # Skip figure extraction / vision interpretation (text-only pipeline)
 python summarize_papers.py --no-figures
@@ -104,9 +115,12 @@ The script exits non-zero if any PDF fails to extract or summarize; failed paper
 
 ### Command-line options
 
+- `--paper NAME` - Process a single PDF from the papers dir, matched by filename, stem, or unique stem substring (case-insensitive, e.g. `wikiskills.pdf` or `wikiskills`). Ambiguous or unmatched names exit with the list of available PDFs
 - `--papers-dir DIR` - Directory containing PDFs (default: `papers`)
-- `--out FILE` - Output markdown path (default: `output/PAPERS_SUMMARY.md`)
+- `--out-dir DIR` - Directory for all outputs: per-paper markdown, INDEX.md, figure crops, and PAPERS_SUMMARY.md with `--combined` (default: `output`)
+- `--combined` - Also write the combined `PAPERS_SUMMARY.md`, derived from the per-paper files on disk (no re-extraction or LLM calls)
 - `--max-pages N` - Limit pages per PDF, 0 = all pages (default: 0)
+- `--max-chunks N` - Max text chunks to summarize per paper (overrides `max_chunks` in `prompts.json`; use to avoid skipping the tail of long papers)
 - `--no-figures` - Skip figure extraction and vision interpretation
 - `--max-figures N` - Max figures to process per paper (default: 12)
 - `--no-cache` - Disable caching, re-extract text from all PDFs
@@ -149,8 +163,8 @@ graph TD
     O --> P[Final Summary]
     P --> Q{More PDFs?}
     Q -->|Yes| C
-    Q -->|No| R[Build Markdown<br/>+ figure crops]
-    R --> S[Write Output]
+    Q -->|No| R[Per-paper markdown<br/>+ INDEX (+ combined)]
+    R --> S[Write if changed]
 ```
 
 **Key stages:**
@@ -168,6 +182,7 @@ The codebase follows a **deep modules** design pattern with strict separation of
 - `lib/text_clean.py` - Pure text transformation functions
 - `lib/content_analysis.py` - Pure analysis functions (DOI, abstract, figure-text annotation) + LLM chunking
 - `lib/summarization.py` - LLM-based summarization (OpenAI)
+- `lib/render.py` - Markdown rendering: per-paper docs, INDEX.md, combined doc derived from files on disk, write-if-changed
 - `lib/cache.py` - Caches extracted text + figure metadata (not summaries/descriptions) for incremental processing
 - `lib/models.py` - Immutable dataclasses (Paper, Figure)
 - `summarize_papers.py` - Thin orchestration layer
@@ -184,18 +199,23 @@ TITLE_OVERRIDES: dict[str, str] = {
 
 ## Output Format
 
-Generated markdown includes:
+Per-paper files are the canonical output:
 
-- Index of all papers with anchor links
-- Per-paper summaries with:
-  - Figure crops (linked from `output/figures/<pdf-stem>/`)
-  - TL;DR (3 bullets)
-  - Problem statement
-  - Approach/methodology
-  - Results with metrics
-  - Practical takeaways
-  - Limitations and open questions
-  - DOI link (if available)
+- **One standalone markdown per paper** - `output/<stem>.md` (e.g. `output/wikiskills.md`): title, source PDF, DOI, figure crops (linked from `output/figures/<pdf-stem>/`), and the full summary
+- **INDEX.md** - `output/INDEX.md`: one line per paper linking to its file, with its first TL;DR bullet as a preview
+- **Combined summary** (optional, `--combined`) - `output/PAPERS_SUMMARY.md`: the per-paper files concatenated under an anchor-linked index. Derived from the files on disk, so rebuilding it never re-runs extraction or the LLM — a `--paper` run with `--combined` refreshes both that paper's file and the combined doc cheaply
+
+Each paper summary contains:
+
+- TL;DR (3 bullets)
+- Problem statement
+- Approach/methodology
+- Results with metrics
+- Practical takeaways
+- Limitations and open questions
+- DOI link (if available)
+
+Files whose content is unchanged are not rewritten, keeping git diffs clean.
 
 ## Testing
 

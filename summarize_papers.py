@@ -6,10 +6,15 @@ Behavior:
 - Extracts text + title from each PDF via sophisticated metadata + text extraction.
 - Generates structured summaries using OpenAI-compatible LLM (required).
 - Caches extracted text in .paper2md/ to skip re-extraction of unchanged PDFs.
+- Writes one standalone markdown per paper (output/<stem>.md) plus INDEX.md;
+  --combined additionally derives output/PAPERS_SUMMARY.md from those files.
+  Files whose content is unchanged are not rewritten.
 
-Usage (PowerShell):
-  python summarize_papers.py [--papers-dir papers] [--out output/PAPERS_SUMMARY.md]
-  python summarize_papers.py --no-cache  # Force re-summarize all papers
+Usage:
+  python summarize_papers.py                       # per-paper files + INDEX.md in output/
+  python summarize_papers.py --combined            # also derive output/PAPERS_SUMMARY.md
+  python summarize_papers.py --paper wikiskills    # single paper (stem substring ok)
+  python summarize_papers.py --no-cache            # force re-extract all PDFs
 
 Required env vars:
   OPENAI_API_KEY          -> API key for LLM provider
@@ -24,21 +29,28 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import traceback
 from dataclasses import replace
-from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
 from tqdm import tqdm
 
-from lib.models import Paper, Figure
+from lib.models import Paper
 from lib.pdf_extract import extract_paper_from_pdf
 from lib.figure_extract import extract_figures
 from lib.vision import describe_figures
 from lib.summarization import summarize_paper
-from lib.content_analysis import find_doi, annotate_text_with_figures
+from lib.content_analysis import annotate_text_with_figures
+from lib.render import (
+    INDEX_FILENAME,
+    COMBINED_FILENAME,
+    build_paper_markdown,
+    build_index_markdown,
+    build_combined_markdown,
+    collect_paper_docs,
+    write_if_changed,
+)
 from lib.cache import PaperCache, compute_pdf_hash
 
 # Load environment variables from root .env if it exists
@@ -69,14 +81,18 @@ def load_papers(
     cache: PaperCache | None = None,
     extract_figs: bool = True,
     max_figures: int = 12,
+    only: Path | None = None,
 ) -> tuple[list[Paper], int]:
     """
     Extract title + text (+ figures) from all PDFs in directory.
     Uses cache to avoid re-extracting unchanged PDFs.
+    When `only` is given, process just that PDF.
 
     Returns: (list of Paper objects with text extracted, extraction failure count)
     """
     pdfs = sorted(papers_dir.glob("*.pdf"))
+    if only:
+        pdfs = [pdf for pdf in pdfs if pdf == only]
     papers: list[Paper] = []
     failures = 0
     cached_count = 0
@@ -130,7 +146,9 @@ def load_papers(
     return papers, failures
 
 
-def generate_summaries(papers: list[Paper]) -> tuple[list[Paper], int]:
+def generate_summaries(
+    papers: list[Paper], max_chunks: int | None = None
+) -> tuple[list[Paper], int]:
     """Describe figures via vision LLM, weave into text, then summarize.
     Returns (papers, failure count)."""
     summarized: list[Paper] = []
@@ -147,7 +165,7 @@ def generate_summaries(papers: list[Paper]) -> tuple[list[Paper], int]:
                 paper = describe_figures(paper)
                 annotated = annotate_text_with_figures(paper.text or "", paper.figures)
                 paper = replace(paper, text=annotated)
-            result = summarize_paper(paper)
+            result = summarize_paper(paper, max_chunks=max_chunks)
             summarized.append(result)
         except Exception as e:
             failures += 1
@@ -163,71 +181,8 @@ def generate_summaries(papers: list[Paper]) -> tuple[list[Paper], int]:
     return summarized, failures
 
 
-def _github_slug(title: str) -> str:
-    """Mimic GitHub's heading anchor slugger so index links resolve on github.com."""
-    slug = re.sub(r"[^\w\s-]", "", title.lower())
-    return re.sub(r"\s", "-", slug)
-
-
-def build_markdown(papers: list[Paper]) -> str:
-    """Build final markdown document from papers."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    lines: list[str] = []
-
-    lines.append("# Papers Summary")
-    lines.append("")
-    lines.append(f"_Generated: {now}_")
-    lines.append("")
-
-    # Index
-    lines.append("## Index")
-    lines.append("")
-    for p in papers:
-        anchor = _github_slug(p.title)
-        lines.append(f"- [{p.title}](#{anchor})")
-    lines.append("")
-
-    # Summaries
-    lines.append("---")
-    lines.append("")
-    for p in papers:
-        lines.append(f"## {p.title}")
-        lines.append("")
-        lines.append(f"- **Source PDF**: `{p.pdf_path.as_posix()}`")
-
-        doi = find_doi(p.text)
-        if doi:
-            lines.append(f"- **DOI**: `https://doi.org/{doi}`")
-        lines.append("")
-
-        if p.figures:
-            lines.append("### Figures")
-            lines.append("")
-            for fig in p.figures:
-                rel = _figure_link(p, fig)
-                if rel:
-                    alt = (fig.caption or fig.label or "figure").replace("[", "(").replace("]", ")")
-                    lines.append(f"![{alt}]({rel})")
-                    lines.append("")
-            lines.append("---")
-            lines.append("")
-
-        if p.summary_md:
-            lines.append(p.summary_md.strip())
-        lines.append("")
-
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def _figure_link(paper: Paper, fig: Figure) -> str | None:
-    """Relative markdown link target for a figure crop, if it exists."""
-    if not fig.png_path or not fig.png_path.exists():
-        return None
-    return f"figures/{paper.pdf_path.stem}/{fig.png_path.name}"
-
-
-def export_figure_crops(papers: list[Paper], out_path: Path) -> int:
-    """Copy figure crops next to the output markdown (output/figures/<stem>/).
+def export_figure_crops(papers: list[Paper], out_dir: Path) -> int:
+    """Copy figure crops into out_dir/figures/<pdf-stem>/.
 
     Returns the number of crops copied.
     """
@@ -238,11 +193,31 @@ def export_figure_crops(papers: list[Paper], out_path: Path) -> int:
         for fig in paper.figures:
             if not fig.png_path or not fig.png_path.exists():
                 continue
-            dest_dir = out_path.parent / "figures" / paper.pdf_path.stem
+            dest_dir = out_dir / "figures" / paper.pdf_path.stem
             dest_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(fig.png_path, dest_dir / fig.png_path.name)
             copied += 1
     return copied
+
+
+def _select_paper(papers_dir: Path, name: str) -> Path:
+    """Resolve --paper NAME to exactly one PDF in papers_dir.
+
+    Accepts the filename ("wikiskills.pdf"), the stem ("wikiskills"), or a
+    unique substring of the stem, all case-insensitive.
+    """
+    key = name.casefold()
+    pdfs = sorted(papers_dir.glob("*.pdf"))
+    matches = [p for p in pdfs if key in {p.name.casefold(), p.stem.casefold()}]
+    if not matches:
+        matches = [p for p in pdfs if key in p.stem.casefold()]
+    if len(matches) == 1:
+        return matches[0]
+    available = "\n  ".join(p.name for p in pdfs) or "(none)"
+    if not matches:
+        raise SystemExit(f"--paper {name!r} matched no PDF in {papers_dir}.\nAvailable:\n  {available}")
+    listed = "\n  ".join(p.name for p in matches)
+    raise SystemExit(f"--paper {name!r} matched multiple PDFs:\n  {listed}")
 
 
 def main() -> int:
@@ -250,9 +225,28 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--papers-dir", default="papers", help="Directory containing PDFs (default: papers)")
     ap.add_argument(
-        "--out",
-        default="output/PAPERS_SUMMARY.md",
-        help="Output markdown path (default: output/PAPERS_SUMMARY.md)",
+        "--out-dir",
+        default="output",
+        help="Directory for all outputs: per-paper markdown, INDEX.md, figure "
+        "crops, and PAPERS_SUMMARY.md with --combined (default: output)",
+    )
+    ap.add_argument(
+        "--paper",
+        metavar="NAME",
+        help="Process a single PDF from the papers dir, matched by filename, "
+        "stem, or unique stem substring (e.g. 'wikiskills.pdf' or 'wikiskills')",
+    )
+    ap.add_argument(
+        "--combined",
+        action="store_true",
+        help="Also write the combined PAPERS_SUMMARY.md, derived from the "
+        "per-paper files on disk (no re-extraction or LLM calls)",
+    )
+    ap.add_argument(
+        "--max-chunks",
+        type=int,
+        default=None,
+        help="Max text chunks to summarize per paper (overrides prompts.json's max_chunks)",
     )
     ap.add_argument("--max-pages", type=int, default=0, help="Limit pages per PDF (0 = all pages)")
     ap.add_argument(
@@ -279,11 +273,13 @@ def main() -> int:
     args = ap.parse_args()
 
     papers_dir = Path(args.papers_dir)
-    out_path = Path(args.out)
+    out_dir = Path(args.out_dir)
     max_pages = None if args.max_pages == 0 else args.max_pages
 
     if not papers_dir.exists():
         raise SystemExit(f"papers dir not found: {papers_dir}")
+
+    only: Path | None = _select_paper(papers_dir, args.paper) if args.paper else None
 
     # Initialize cache (unless disabled)
     cache = None if args.no_cache else PaperCache()
@@ -299,16 +295,39 @@ def main() -> int:
         cache=cache,
         extract_figs=not args.no_figures,
         max_figures=args.max_figures,
+        only=only,
     )
-    papers, summarize_failures = generate_summaries(papers)
+    papers, summarize_failures = generate_summaries(papers, max_chunks=args.max_chunks)
 
-    md = build_markdown(papers)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(md, encoding="utf-8")
-    n_crops = export_figure_crops(papers, out_path)
-    print(f"Wrote: {out_path}")
+    if only and not papers:
+        print(f"[ERROR] No text could be extracted for {only.name}; nothing to write.")
+        return 1
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    n_crops = export_figure_crops(papers, out_dir)
+
+    # Per-paper files are canonical; write only those whose content changed.
+    written = 0
+    for p in papers:
+        path = out_dir / f"{p.pdf_path.stem}.md"
+        if write_if_changed(path, build_paper_markdown(p)):
+            print(f"Wrote: {path}")
+            written += 1
+    unchanged = len(papers) - written
+    if unchanged:
+        print(f"[INFO] {unchanged} per-paper file(s) unchanged, not rewritten")
+
+    # INDEX and the combined doc are derived from the per-paper files on disk,
+    # so they reflect every paper summarized so far — not just this run's.
+    docs = collect_paper_docs(out_dir)
+    if write_if_changed(out_dir / INDEX_FILENAME, build_index_markdown(docs)):
+        print(f"Wrote: {out_dir / INDEX_FILENAME}")
+    if args.combined:
+        if write_if_changed(out_dir / COMBINED_FILENAME, build_combined_markdown(docs)):
+            print(f"Wrote: {out_dir / COMBINED_FILENAME}")
+
     if n_crops:
-        print(f"Exported {n_crops} figure crops to: {out_path.parent / 'figures'}")
+        print(f"Exported {n_crops} figure crops to: {out_dir / 'figures'}")
 
     if extract_failures or summarize_failures:
         print(
