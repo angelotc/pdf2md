@@ -5,11 +5,11 @@ Automatically generate structured markdown summaries of academic PDFs for use as
 ## Features
 
 - **Sophisticated title extraction**: PDF metadata (/Title, XMP) → first-page text heuristics → filename fallback
-- **Figure extraction + vision interpretation**: figure regions (raster + vector) detected via PyMuPDF geometry, cropped to PNG, caption-matched, and described by a vision-capable LLM; descriptions are woven into the text sent to the summarizer and crops are linked in the output
+- **Figure extraction + vision interpretation**: figure regions (raster + vector) detected via PyMuPDF geometry, cropped to PNG, caption-matched, and semantically described by a vision-capable LLM (what it is → what it shows → what it means); descriptions are woven into the text sent to the summarizer and persisted in each paper's raw extract
 - **LLM-based summarization**: OpenAI-compatible API with map-reduce strategy for high-quality summaries
 - **Multiple LLM providers**: Supports OpenAI, OpenRouter, Gemini, or any OpenAI-compatible endpoint
-- **Structured output**: TL;DR, Problem, Approach, Results, Practical Takeaways, Limitations
-- **Incremental processing**: Caches extracted text + figure metadata, skips re-extraction for unchanged PDFs
+- **Structured output**: per-paper summary docs, full-text raw extracts with figures described inline, INDEX.md, and an optional combined doc
+- **Incremental processing**: Caches extracted text + figure metadata, skips re-extraction for unchanged PDFs; unchanged output files are never rewritten
 - **Customizable prompts**: Configure via `prompts.json`
 
 ## Installation
@@ -79,7 +79,8 @@ Customize summarization prompts and chunking via `prompts.json`:
 
 ```bash
 # Basic usage (requires OPENAI_API_KEY in .env or environment).
-# Writes one standalone markdown per paper (output/<stem>.md) plus
+# Writes one standalone markdown per paper (output/<stem>.md), a full-text
+# raw extract with described figures (output/raw/<stem>.md), plus
 # output/INDEX.md linking them all.
 python summarize_papers.py
 
@@ -90,8 +91,9 @@ OPENAI_API_KEY=sk-... python summarize_papers.py
 python summarize_papers.py --combined
 
 # Run the pipeline for a single paper (matched by filename, stem, or unique
-# stem substring). Refreshes its file and INDEX.md; add --combined to also
-# rebuild the combined doc (cheap: derived from disk, no LLM calls).
+# stem substring). Refreshes its summary doc, raw extract, and INDEX.md; add
+# --combined to also rebuild the combined doc (cheap: derived from disk, no
+# LLM calls).
 python summarize_papers.py --paper wikiskills.pdf
 python summarize_papers.py --paper wikiskills --max-chunks 12
 
@@ -163,14 +165,14 @@ graph TD
     O --> P[Final Summary]
     P --> Q{More PDFs?}
     Q -->|Yes| C
-    Q -->|No| R[Per-paper markdown<br/>+ INDEX (+ combined)]
+    Q -->|No| R[Per-paper summary + raw docs<br/>+ INDEX (+ combined)]
     R --> S[Write if changed]
 ```
 
 **Key stages:**
 1. **PDF → Paper** - Title extraction cascade + text extraction (pdfminer.six) + figure region detection (PyMuPDF: raster image bboxes + clustered vector drawings, caption-matched, cropped to PNG)
 2. **Paper → Summarized Paper** - Vision descriptions of figure crops → descriptions woven into text → map-reduce LLM summarization (chunk → summarize → combine)
-3. **Papers → Markdown** - Build structured output with index, summaries, and linked figure crops
+3. **Papers → Markdown** - Per-paper summary docs + raw extracts (full text with described figures inline), INDEX.md, and optionally the combined doc — written only when changed
 
 ## Architecture
 
@@ -182,7 +184,7 @@ The codebase follows a **deep modules** design pattern with strict separation of
 - `lib/text_clean.py` - Pure text transformation functions
 - `lib/content_analysis.py` - Pure analysis functions (DOI, abstract, figure-text annotation) + LLM chunking
 - `lib/summarization.py` - LLM-based summarization (OpenAI)
-- `lib/render.py` - Markdown rendering: per-paper docs, INDEX.md, combined doc derived from files on disk, write-if-changed
+- `lib/render.py` - Markdown rendering: per-paper summary docs and raw extracts (full text + described figures), INDEX.md, combined doc derived from files on disk, write-if-changed
 - `lib/cache.py` - Caches extracted text + figure metadata (not summaries/descriptions) for incremental processing
 - `lib/models.py` - Immutable dataclasses (Paper, Figure)
 - `summarize_papers.py` - Thin orchestration layer
@@ -202,7 +204,8 @@ TITLE_OVERRIDES: dict[str, str] = {
 Per-paper files are the canonical output:
 
 - **One standalone markdown per paper** - `output/<stem>.md` (e.g. `output/wikiskills.md`): title, source PDF, DOI, figure crops (linked from `output/figures/<pdf-stem>/`), and the full summary
-- **INDEX.md** - `output/INDEX.md`: one line per paper linking to its file, with its first TL;DR bullet as a preview
+- **Raw extract per paper** - `output/raw/<stem>.md`: the paper's complete extracted text with each figure's crop and vision description embedded at its caption position (descriptions are blockquoted — model output, not paper text). This is the exact material the summarizer consumed
+- **INDEX.md** - `output/INDEX.md`: one line per paper linking to its file (and raw extract), with its first TL;DR bullet as a preview
 - **Combined summary** (optional, `--combined`) - `output/PAPERS_SUMMARY.md`: the per-paper files concatenated under an anchor-linked index. Derived from the files on disk, so rebuilding it never re-runs extraction or the LLM — a `--paper` run with `--combined` refreshes both that paper's file and the combined doc cheaply
 
 Each paper summary contains:

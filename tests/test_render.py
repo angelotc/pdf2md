@@ -8,11 +8,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.models import Paper, Figure
+from lib.vision import NO_VISION_PLACEHOLDER
 from lib.render import (
     INDEX_FILENAME,
     COMBINED_FILENAME,
     github_slug,
     build_paper_markdown,
+    build_paper_raw_markdown,
     bump_headings,
     extract_h1,
     first_tldr_line,
@@ -95,6 +97,80 @@ class TestBuildPaperMarkdown(unittest.TestCase):
         )
         md = build_paper_markdown(gone)
         self.assertNotIn("![", md)
+
+
+class TestBuildPaperRawMarkdown(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.png = Path(self.tmp.name) / "fig_p3_0.png"
+        self.png.write_bytes(b"fake-png")
+        self.addCleanup(self.tmp.cleanup)
+
+    def _figure(self, description="* bullet one\n* bullet two") -> Figure:
+        return Figure(
+            page=3, rect=(0, 0, 1, 1), label="Figure 2",
+            caption="Overview of the framework.",
+            png_path=self.png, description=description,
+        )
+
+    def _paper(self, figures) -> Paper:
+        return Paper(
+            pdf_path=Path("papers/wikiskills.pdf"),
+            title="WikiSkill",
+            text="Intro paragraph.\n\nFigure 2: Overview of the framework.\n\nNext paragraph.",
+            figures=figures,
+        )
+
+    def test_raw_doc_embeds_figure_at_caption(self):
+        md = build_paper_raw_markdown(self._paper((self._figure(),)))
+        self.assertTrue(md.startswith("# WikiSkill\n"))
+        self.assertIn("Raw extract of `papers/wikiskills.pdf`", md)
+        # Figure block lands after the caption line, before the next paragraph
+        caption_pos = md.find("Figure 2: Overview of the framework.")
+        block_pos = md.find("![Figure 2](../figures/wikiskills/fig_p3_0.png)")
+        next_pos = md.find("Next paragraph.")
+        self.assertLess(caption_pos, block_pos)
+        self.assertIn("**Figure 2** (page 4) — Overview of the framework.", md)
+        self.assertIn("> * bullet one", md)  # description blockquoted
+        self.assertIn("Intro paragraph.", md)
+
+    def test_placeholder_description_not_blockquoted(self):
+        fig = self._figure(description=NO_VISION_PLACEHOLDER)
+        md = build_paper_raw_markdown(self._paper((fig,)))
+        self.assertNotIn("> -", md)
+        self.assertNotIn(NO_VISION_PLACEHOLDER, md)
+
+    def test_unlocatable_figure_appended(self):
+        fig = Figure(page=0, rect=(0, 0, 1, 1), label="Figure 9",
+                     caption=None, png_path=None, description="* late figure")
+        md = build_paper_raw_markdown(self._paper((fig,)))
+        self.assertIn("**Figure 9** (page 1)", md)
+        self.assertTrue(md.rstrip().endswith("> * late figure"))
+
+    def test_no_figures_is_text_passthrough(self):
+        paper = Paper(pdf_path=Path("papers/x.pdf"), title="X", text="Just text, no figures.")
+        md = build_paper_raw_markdown(paper)
+        self.assertIn("Just text, no figures.", md)
+        self.assertNotIn("**Figure", md)
+
+
+class TestIndexRawLinks(unittest.TestCase):
+    def test_raw_link_added_when_file_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / "alpha.md").write_text("# Alpha\n\n### TL;DR\n* **A:** point\n", encoding="utf-8")
+            (out / "raw").mkdir()
+            (out / "raw" / "alpha.md").write_text("# Alpha raw\n", encoding="utf-8")
+            md = build_index_markdown(collect_paper_docs(out))
+        self.assertIn("[Alpha](alpha.md) ([raw](raw/alpha.md)) — A: point", md)
+
+    def test_no_raw_link_when_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / "alpha.md").write_text("# Alpha\n\n### TL;DR\n* **A:** point\n", encoding="utf-8")
+            md = build_index_markdown(collect_paper_docs(out))
+        self.assertIn("[Alpha](alpha.md) — A: point", md)
+        self.assertNotIn("raw/", md)
 
 
 class TestBumpHeadings(unittest.TestCase):

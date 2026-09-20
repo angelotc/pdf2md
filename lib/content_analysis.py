@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 from lib.models import Figure
 from lib.text_clean import _clean_text, _strip_boilerplate_lines
@@ -85,7 +86,11 @@ def chunk_text_for_llm(text: str, max_chars: int = 12000) -> list[str]:
     return chunks
 
 
-def annotate_text_with_figures(text: str, figures: list[Figure] | tuple[Figure, ...]) -> str:
+def annotate_text_with_figures(
+    text: str,
+    figures: list[Figure] | tuple[Figure, ...],
+    block_fn: Callable[[Figure], str] | None = None,
+) -> str:
     """Weave figure descriptions into paper text for the summarizer.
 
     Each figure's block is inserted right after the first occurrence of its
@@ -94,11 +99,15 @@ def annotate_text_with_figures(text: str, figures: list[Figure] | tuple[Figure, 
     as a trailing block. Descriptions equal to the caption-only placeholder
     are still inserted (the caption reference keeps context) but without a
     duplicate description body.
+
+    block_fn renders a figure to a text block; the default produces the
+    plain-text blocks fed to the LLM, callers can pass a markdown renderer.
     """
     if not figures:
         return text
 
-    blocks: dict[int, str] = {}
+    block = block_fn or _figure_block
+    blocks: dict[int, list[str]] = {}
     unplaced: list[Figure] = []
     for fig in figures:
         anchor = None
@@ -113,7 +122,7 @@ def annotate_text_with_figures(text: str, figures: list[Figure] | tuple[Figure, 
         if anchor is None:
             unplaced.append(fig)
         else:
-            blocks.setdefault(anchor, []).append(_figure_block(fig))
+            blocks.setdefault(anchor, []).append(block(fig))
 
     if blocks:
         out: list[str] = []
@@ -126,7 +135,7 @@ def annotate_text_with_figures(text: str, figures: list[Figure] | tuple[Figure, 
         text = "".join(out)
 
     if unplaced:
-        text += "\n\n" + "\n\n".join(_figure_block(f) for f in unplaced)
+        text += "\n\n" + "\n\n".join(block(f) for f in unplaced)
 
     return text
 

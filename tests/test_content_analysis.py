@@ -67,5 +67,20 @@ class TestChunkTextForLlm(unittest.TestCase):
         self.assertEqual("".join(c.replace(" ", "") for c in chunks), "word" * 6000)
 
 
+class TestAnnotateBlockFn(unittest.TestCase):
+    def test_custom_block_renderer_is_used(self):
+        from lib.content_analysis import annotate_text_with_figures
+        from lib.models import Figure
+
+        fig = Figure(page=0, rect=(0, 0, 1, 1), label="Figure 1",
+                     caption="The caption.", png_path=None, description="* desc")
+        text = "Before.\nFigure 1: The caption.\nAfter."
+        out = annotate_text_with_figures(
+            text, [fig], block_fn=lambda f: f"[[IMG {f.label}]]"
+        )
+        self.assertIn("[[IMG Figure 1]]", out)
+        self.assertNotIn("[Figure 1 (page 1)]", out)  # default block not used
+
+
 if __name__ == "__main__":
     unittest.main()

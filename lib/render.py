@@ -13,7 +13,8 @@ from pathlib import Path
 from tqdm import tqdm
 
 from lib.models import Paper, Figure
-from lib.content_analysis import find_doi
+from lib.content_analysis import find_doi, annotate_text_with_figures
+from lib.vision import NO_VISION_PLACEHOLDER
 
 INDEX_FILENAME = "INDEX.md"
 COMBINED_FILENAME = "PAPERS_SUMMARY.md"
@@ -68,6 +69,55 @@ def _paper_lines(paper: Paper, heading_level: int) -> list[str]:
 def build_paper_markdown(paper: Paper) -> str:
     """Build a standalone markdown document for a single paper."""
     return "\n".join(_paper_lines(paper, heading_level=1)).rstrip() + "\n"
+
+
+def _raw_figure_block(fig: Figure, img_rel: str | None) -> str:
+    """Markdown block for one figure inside the raw doc: header, crop, description.
+
+    The vision description is blockquoted to distinguish model output from
+    the paper's own text.
+    """
+    label = (fig.label or "Figure").rstrip(": .")
+    header = f"**{label}** (page {fig.page + 1})"
+    if fig.caption and fig.caption != fig.label:
+        header += f" — {fig.caption}"
+
+    lines = [header]
+    if img_rel:
+        lines += ["", f"![{label}]({img_rel})"]
+    if fig.description and fig.description != NO_VISION_PLACEHOLDER:
+        lines += [""] + [f"> {ln}" if ln.strip() else ">" for ln in fig.description.splitlines()]
+    return "\n".join(lines)
+
+
+def build_paper_raw_markdown(paper: Paper) -> str:
+    """Standalone raw doc: the paper's full extracted text with figures inline.
+
+    Each figure's crop (linked) and vision description are inserted right
+    after its caption in the text; figures whose captions aren't found are
+    appended at the end. This is the exact material the summarizer saw,
+    minus the plain-text annotation markup.
+    """
+    stem = paper.pdf_path.stem
+
+    def block(fig: Figure) -> str:
+        img_rel = None
+        if fig.png_path and fig.png_path.exists():
+            img_rel = f"../figures/{stem}/{fig.png_path.name}"
+        return _raw_figure_block(fig, img_rel)
+
+    if paper.figures:
+        body = annotate_text_with_figures(paper.text or "", paper.figures, block_fn=block)
+    else:
+        body = paper.text or ""
+
+    header = (
+        f"# {paper.title}\n\n"
+        f"> Raw extract of `{paper.pdf_path.as_posix()}` — full paper text with "
+        "figure crops and their vision-model descriptions (quoted). Layout is "
+        "not faithful to the original PDF.\n\n---\n\n"
+    )
+    return header + body.strip() + "\n"
 
 
 def bump_headings(md: str, levels: int = 1) -> str:
@@ -144,6 +194,8 @@ def build_index_markdown(docs: list[tuple[Path, str]]) -> str:
     for path, content in docs:
         title = extract_h1(content) or path.stem.replace("_", " ")
         entry = f"- [{title}]({path.name})"
+        if (path.parent / "raw" / path.name).exists():
+            entry += f" ([raw](raw/{path.name}))"
         tldr = first_tldr_line(content)
         if tldr:
             entry += f" — {tldr}"

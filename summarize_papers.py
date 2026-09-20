@@ -8,7 +8,9 @@ Behavior:
 - Caches extracted text in .paper2md/ to skip re-extraction of unchanged PDFs.
 - Writes one standalone markdown per paper (output/<stem>.md) plus INDEX.md;
   --combined additionally derives output/PAPERS_SUMMARY.md from those files.
-  Files whose content is unchanged are not rewritten.
+  Every paper also gets a raw doc (output/raw/<stem>.md): the full extracted
+  text with figure crops and their vision descriptions inline. Files whose
+  content is unchanged are not rewritten.
 
 Usage:
   python summarize_papers.py                       # per-paper files + INDEX.md in output/
@@ -46,6 +48,7 @@ from lib.render import (
     INDEX_FILENAME,
     COMBINED_FILENAME,
     build_paper_markdown,
+    build_paper_raw_markdown,
     build_index_markdown,
     build_combined_markdown,
     collect_paper_docs,
@@ -161,12 +164,16 @@ def generate_summaries(
             continue
 
         try:
+            # The annotated text (descriptions woven in) is the summarizer's
+            # input only; the returned paper keeps the original text so the
+            # raw doc can render figures with markdown blocks instead.
+            llm_input = paper
             if paper.figures:
                 paper = describe_figures(paper)
                 annotated = annotate_text_with_figures(paper.text or "", paper.figures)
-                paper = replace(paper, text=annotated)
-            result = summarize_paper(paper, max_chunks=max_chunks)
-            summarized.append(result)
+                llm_input = replace(paper, text=annotated)
+            summarized_result = summarize_paper(llm_input, max_chunks=max_chunks)
+            summarized.append(replace(paper, summary_md=summarized_result.summary_md))
         except Exception as e:
             failures += 1
             _report_error("summarize", paper.pdf_path, e)
@@ -308,12 +315,18 @@ def main() -> int:
 
     # Per-paper files are canonical; write only those whose content changed.
     written = 0
+    total = 0
     for p in papers:
-        path = out_dir / f"{p.pdf_path.stem}.md"
-        if write_if_changed(path, build_paper_markdown(p)):
-            print(f"Wrote: {path}")
-            written += 1
-    unchanged = len(papers) - written
+        targets = [(out_dir / f"{p.pdf_path.stem}.md", build_paper_markdown(p))]
+        if p.text or p.figures:
+            raw_path = out_dir / "raw" / f"{p.pdf_path.stem}.md"
+            targets.append((raw_path, build_paper_raw_markdown(p)))
+        for path, content in targets:
+            total += 1
+            if write_if_changed(path, content):
+                print(f"Wrote: {path}")
+                written += 1
+    unchanged = total - written
     if unchanged:
         print(f"[INFO] {unchanged} per-paper file(s) unchanged, not rewritten")
 
